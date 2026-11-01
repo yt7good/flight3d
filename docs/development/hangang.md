@@ -1,6 +1,7 @@
 # Hangang low-flight scenario
 
-Related: #253 (scenario), #267 (detailed bridge assets), #391 (free flight).
+Related: #253 (scenario), #267 (detailed bridge assets), #391 (free flight),
+#395 (deck streetlights, arches and banked pavilion contact).
 
 The lobby offers **Han River** alongside the airports under **Flight region**.
 Only this region offers **Han River low-level flight**; existing airports do not.
@@ -25,9 +26,8 @@ The scenario uses the common flight HUD and controls. Use **Esc → Scenario
 restart** to restart; after a crash use the common report and
 **Space / R / Enter → main menu → Fly**. Menu selection retains the Han River region.
 
-Leaving the river corridor is not prevented. Skyline buildings and above-deck
-arch decorations have no collision proxies (see below); boundary handling is
-tracked in #393.
+Leaving the river corridor is not prevented. Skyline buildings have no collision
+proxies (see below); boundary handling is tracked in #393.
 
 ## Physics and geometry contracts
 
@@ -39,15 +39,22 @@ The bridge deck is not inserted into the terrain heightmap. Water/ground height
 therefore continues to supply the ground-effect and radio-altimeter reference.
 
 `bridgeSolids()` supplies both rendered geometry and solid collision boxes: deck,
-three girders, cross beams every 20 m, and per pier a column and the cap the
-girders bear on. The gate pier caps' inner faces (|x| = 50 m) and the girder
+three girders, cross beams every 20 m, per pier a column and the cap the
+girders bear on, and the deck streetlights (post and lamp head every 55 m).
+On the central bridge, `bridgeArchCurves()` defines the two above-deck arch
+centrelines that `hangangBridges.js` draws as 1.4 m tubes, and
+`bridgeArchSegments()` turns each of the tube's 32 straight sections into an
+oriented collision box enclosing it (#395). The gate pier caps' inner faces (|x| = 50 m) and the girder
 soffit (34 m) bound the central opening. Each rail box is the collision envelope
 of the open railing (curb, posts, mid and top rails) that `hangangBridges.js`
 draws inside it. `hangangBridges.js` merges every bridge into one mesh per
 material (steel, concrete, road, lights, markers), so a bridge costs five draw
 calls rather than about 110. `HangangCollision` transforms C172 part bounds using
 `inverse(M_bridge) * M_aircraft`. Fuselage, wings, tail, fin and fixed gear have
-separate conservative bounds. Between physics samples, translation is sampled
+separate conservative bounds. Each part is tested as an oriented box: its
+axis-aligned bounds only select candidate solids, and a separating-axis test
+decides contact, so a banked wing's raised side does not reach structures
+below its lowest point. Between physics samples, translation is sampled
 at <=0.2 m and quaternion rotation at <=0.015 radians with 0.15 m padding. This
 reduces tunneling through thin members; it is an approximation, not exact swept
 mesh collision. A malformed sample is skipped, and a jump of more than about 100 m (a respawn or
@@ -61,8 +68,12 @@ not decoration. The pavilion on it (#381) is `nodeul-pavilion.glb`, placed by
 49 m square plaza (4.0–4.3 m) carrying a 31 × 42 m building whose roofs reach
 15.3 m. The builder bakes `src/config/nodeulPavilionHeights.json` from that GLB's
 triangles: the highest surface in each 1 m cell, island-relative. `HangangCollision`
-fails a part box that dips below any cell it overlaps, so the empty corners of the
-former 45 × 80 m box no longer collide and every roof does. `tests/nodeulPavilion.test.js`
+treats each cell as a column up to that height and fails an oriented part box
+that reaches into one, so the empty corners of the former 45 × 80 m box no longer
+collide and every roof does. Until #395 the part's axis-aligned bounds were
+compared instead; in a bank that also failed cells under the raised wing.
+`tests/hangang.test.js` checks a 12°/20°/29° bank grid against surface sampling of
+the part boxes. `tests/nodeulPavilion.test.js`
 rebakes the field from the shipped GLB and must match the committed JSON; rerun
 the builder after changing the GLB, scale, yaw or island position. The centre of
 the opening now clears the pavilion from about 17 m reference height (fixed gear
@@ -78,9 +89,8 @@ merged meshes span the opening (`tests/hangangScene.test.js`).
 
 The riverbanks use sampled BufferGeometry ribbons and the skyline uses one
 InstancedMesh with 160 buildings. Scenery is cached and reused on retries.
-Above-deck arch decorations and buildings outside the river corridor
-are visual approximations without detailed collision proxies; #395 tracks
-streetlights and arches on the deck, #393 the buildings.
+Buildings outside the river corridor are visual approximations without
+collision proxies; #393 tracks them.
 
 ## Provenance and limits
 

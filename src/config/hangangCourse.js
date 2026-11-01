@@ -1,5 +1,6 @@
 // Original training scenery inspired by the Han River, NOT surveyed bridges.
 // Metres, +Y up, travel generally -Z. Geometry and collision share these dimensions.
+import { CatmullRomCurve3, Vector3 } from 'three';
 import pavilionHeights from './nodeulPavilionHeights.json' with { type: 'json' };
 
 export const HANGANG_COURSE = {
@@ -52,8 +53,45 @@ export function bridgeSolids(bridge) {
   for (let x = -590; x <= 590; x += 20) boxes.push({ part: 'crossbeam', center: [x, 35.2, 0], size: [0.6, 1.6, 16] });
   // Rail boxes are the collision envelope of the open railing drawn inside them.
   for (const z of [-11, 11]) boxes.push({ part: 'rail', center: [0, 41, z], size: [1200, 2, 0.4] });
+  // Deck streetlights: post and lamp head (#395).
+  for (let x = -550; x <= 550; x += 55) {
+    for (const z of [-9.5, 9.5]) {
+      boxes.push({ part: 'lamppost', center: [x, 41.8, z], size: [0.3, 3.5, 0.3] });
+      boxes.push({ part: 'lamp', center: [x, 43.6, z], size: [0.6, 0.4, 0.6] });
+    }
+  }
   if (bridge.style === 'tower') {
     for (const x of [-150, 150]) boxes.push({ part: 'tower', center: [x, 62, 0], size: [10, 52, 7] });
+  }
+  return boxes;
+}
+
+// Above-deck arch ribs on 'arch' bridges, drawn as tubes of ARCH_TUBE.radius around these
+// centrelines with ARCH_TUBE.segments straight sections. bridgeArchSegments() turns the
+// same sections into collision boxes (#395).
+export const ARCH_TUBE = { radius: 1.4, segments: 32 };
+
+export function bridgeArchCurves(bridge) {
+  if (bridge.style !== 'arch') return [];
+  return [-9, 9].map(z => new CatmullRomCurve3(
+    Array.from({ length: 17 }, (_, i) => new Vector3(-150 + i * 18.75, 41 + 35 * Math.sin(i * Math.PI / 16), z))));
+}
+
+// One oriented box per tube section: its axis runs between consecutive ring centres
+// (TubeGeometry samples the curve with getPointAt, as getSpacedPoints does) and its
+// square cross-section encloses the tube. Ends overlap slightly so the rings at each
+// joint, which face the curve tangent rather than either section, stay covered.
+export function bridgeArchSegments(bridge) {
+  const { radius, segments } = ARCH_TUBE, boxes = [];
+  for (const curve of bridgeArchCurves(bridge)) {
+    const points = curve.getSpacedPoints(segments);
+    for (let i = 0; i < segments; i++) {
+      const axis = points[i + 1].clone().sub(points[i]), length = axis.length();
+      axis.divideScalar(length);
+      const side = new Vector3(0, 0, 1).cross(axis).normalize(), up = axis.clone().cross(side);
+      boxes.push({ part: 'arch', center: points[i].clone().lerp(points[i + 1], 0.5).toArray(),
+        axes: [axis.toArray(), side.toArray(), up.toArray()], half: [length / 2 + 0.1, radius, radius] });
+    }
   }
   return boxes;
 }

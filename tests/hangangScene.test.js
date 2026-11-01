@@ -1,6 +1,6 @@
 import test from 'node:test';
 import { Box3, Matrix4, Vector3 } from 'three';
-import { HANGANG_COURSE, bridgeSolids } from '../src/config/hangangCourse.js';
+import { HANGANG_COURSE, bridgeArchSegments, bridgeSolids } from '../src/config/hangangCourse.js';
 import { HangangCollision } from '../src/director/HangangCollision.js';
 import assert from 'node:assert/strict';
 import { HangangScene } from '../src/environment/HangangScene.js';
@@ -111,6 +111,20 @@ test('bridges draw their collision solids in five merged meshes', () => {
     const railing = triangles.filter(t => t.points.every(p => p.y > 40.01 && Math.abs(p.z) > 10.7));
     assert.ok(railing.length > 0);
     for (const { points } of railing) assert.ok(rails.some(r => points.every(p => r.containsPoint(p))), `${spec.id} railing ${points[0].toArray()}`);
+  });
+});
+
+test('arch collision sections enclose every drawn arch vertex (#395)', () => {
+  const scene = new HangangScene();
+  HANGANG_COURSE.bridges.forEach((spec, i) => {
+    const sections = bridgeArchSegments(spec).map(s => ({ ...s, center: new Vector3(...s.center), axes: s.axes.map(a => new Vector3(...a)) }));
+    const inside = p => sections.some(({ center, axes, half }) => axes.every((a, k) => Math.abs(p.clone().sub(center).dot(a)) <= half[k] + 1e-6));
+    // Arch vertices are the steel ones above the railings and lamps, outboard of the towers.
+    const arch = bridgeTriangles(scene.bridges[i]).filter(t => t.mesh.endsWith('steel')).flatMap(t => t.points)
+      .filter(p => p.y > 44 && Math.abs(p.z) > 5);
+    assert.equal(arch.length > 0, spec.style === 'arch', spec.id);
+    assert.equal(sections.length, spec.style === 'arch' ? 64 : 0);
+    for (const p of arch) assert.ok(inside(p), `${spec.id} arch vertex ${p.toArray()}`);
   });
 });
 

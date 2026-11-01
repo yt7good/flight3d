@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Vector3, Quaternion, Scene, Box3 } from 'three';
-import { HangangCollision } from '../src/director/HangangCollision.js';
+import { Vector3, Quaternion, Scene, Box3, Matrix4, Euler } from 'three';
+import { HangangCollision, C172_PARTS } from '../src/director/HangangCollision.js';
 import { HangangScenario } from '../src/director/HangangScenario.js';
 import { HANGANG_COURSE as course, riverCenter } from '../src/config/hangangCourse.js';
 import { lobbyBriefing } from '../src/ui/lobbyBriefing.js';
@@ -68,6 +68,83 @@ test('pavilion collides where its mesh stands, not across its bounding box', () 
   assert.ok(roofs > 800, `roof cells ${roofs}`); assert.ok(open > 800, `open cells ${open}`);
   assert.ok(field.top > 15 && field.top < 15.5, `roof top ${field.top}`);
   assert.equal(probe(0, 0, field.top + 0.3), null);
+});
+// Flies bridge-local `from` -> `to` in 1 m steps, nose along the path.
+function bridgePass(bridgeIndex, from, to) {
+  const b = course.bridges[bridgeIndex], collision = new HangangCollision();
+  const toWorld = new Matrix4().makeRotationY(b.yaw).setPosition(b.x, 0, b.z);
+  const heading = Math.atan2(-(to[0] - from[0]), -(to[2] - from[2]));
+  const attitude = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), b.yaw + heading);
+  const a = new Vector3(...from), span = new Vector3(...to).sub(a), steps = Math.ceil(span.length());
+  for (let s = 0; s <= steps && !collision.contact; s++) {
+    collision.update(a.clone().addScaledVector(span, s / steps).applyMatrix4(toWorld), attitude);
+  }
+  return collision.contact;
+}
+test('deck streetlights and arches above the deck are solid (#395)', () => {
+  // Along the deck through a row of streetlights, clear of the rails.
+  for (const i of [0, 1, 2]) assert.match(bridgePass(i, [-300, 42.5, 9], [300, 42.5, 9])?.structure ?? '', /^lamp/);
+  // Same run between the rows touches nothing (the east bridge's towers stand there).
+  for (const i of [0, 1]) assert.equal(bridgePass(i, [-300, 42.5, 0], [300, 42.5, 0]), null);
+  // Across the central bridge through the arch crowns, and under them.
+  assert.equal(bridgePass(1, [0, 75, 40], [0, 75, -40])?.structure, 'arch');
+  assert.equal(bridgePass(1, [-100, 58, 40], [-100, 58, -40])?.structure, 'arch');
+  assert.equal(bridgePass(1, [0, 70, 40], [0, 70, -40]), null);
+  assert.equal(bridgePass(1, [-100, 52, 40], [-100, 52, -40]), null);
+  // Along the deck between the two arches; the other bridges have none.
+  assert.equal(bridgePass(1, [-200, 60, 0], [200, 60, 0]), null);
+  assert.equal(bridgePass(0, [0, 75, 40], [0, 75, -40]), null);
+});
+
+// Surface points of an oriented box, about `step` apart.
+function obbSurface({ center, axes, half }, step) {
+  const points = [];
+  for (let f = 0; f < 3; f++) {
+    const [u, v] = [(f + 1) % 3, (f + 2) % 3], nu = Math.ceil(2 * half[u] / step), nv = Math.ceil(2 * half[v] / step);
+    for (const sign of [-1, 1]) for (let a = 0; a <= nu; a++) for (let b = 0; b <= nv; b++) {
+      points.push(center.clone().addScaledVector(axes[f], sign * half[f])
+        .addScaledVector(axes[u], (2 * a / nu - 1) * half[u]).addScaledVector(axes[v], (2 * b / nv - 1) * half[v]));
+    }
+  }
+  return points;
+}
+test('banked parts touch the pavilion only where their surface reaches it (#395)', () => {
+  const collision = new HangangCollision(), island = course.nodeulseom, field = island.pavilion.heights;
+  const height = (x, z) => {
+    const i = Math.floor((x - island.x - field.x0) / field.cell), j = Math.floor((z - island.z - field.z0) / field.cell);
+    return i < 0 || j < 0 || i >= field.cols || j >= field.rows ? -Infinity : field.heights[j * field.cols + i];
+  };
+  // Highest cell within `e` of a point, for the tolerant reference.
+  const near = (x, z, e) => Math.max(height(x - e, z - e), height(x + e, z - e), height(x - e, z + e), height(x + e, z + e));
+  const step = 0.2, e = 0.2, matrix = new Matrix4(), q = new Quaternion();
+  let checked = 0, contacts = 0, aabbOnly = 0;
+  for (const bank of [12, 20, 29]) for (const yaw of [0, 0.7, Math.PI / 2]) {
+    q.setFromEuler(new Euler(0, yaw, bank * Math.PI / 180, 'YXZ'));
+    for (let x = -24; x <= 24; x += 2) for (let z = -24; z <= 24; z += 2) {
+      const ground = height(island.x + x, island.z + z);
+      for (const lift of [1, 2.5, 4]) {
+        matrix.compose(new Vector3(island.x + x, ground + lift, island.z + z), q, new Vector3(1, 1, 1));
+        for (const part of C172_PARTS) {
+          const box = collision.setPart(part, matrix), hit = collision.pavilionHit(box, collision.obb);
+          checked++;
+          // The former test: any overlapped cell above the AABB's lowest point.
+          const aabbHit = box.min.y <= field.top && [...Array(Math.ceil(box.max.x - box.min.x) + 2)].some((_, a) =>
+            [...Array(Math.ceil(box.max.z - box.min.z) + 2)].some((_, b) =>
+              height(Math.min(box.min.x + a, box.max.x), Math.min(box.min.z + b, box.max.z)) >= box.min.y));
+          if (!aabbHit) { assert.equal(hit, false); continue; }
+          const surface = obbSurface(collision.obb, step);
+          const strict = surface.some(p => height(p.x, p.z) >= p.y), loose = surface.some(p => near(p.x, p.z, e) >= p.y - e);
+          const where = `bank ${bank} yaw ${yaw} at ${x},${z},+${lift} ${part.name}`;
+          if (strict) assert.ok(hit, `missed: ${where}`);
+          if (hit) assert.ok(loose, `false contact: ${where}`);
+          contacts += hit; aabbOnly += !strict;
+        }
+      }
+    }
+  }
+  assert.ok(contacts > 1000, `contacts ${contacts} of ${checked}`);
+  // The grid includes poses the former AABB test failed but the surface never reaches.
+  assert.ok(aabbOnly > 100, `AABB-only contacts ${aabbOnly}`);
 });
 test('malformed samples and teleports never switch collision off', () => {
   const collision = new HangangCollision();
