@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><title>F-16 오른팔 시안</title>
+<style>*{box-sizing:border-box}html,body{margin:0;background:#30363a}canvas{display:block;width:100vw;height:100vh}</style>
+<canvas></canvas>
+<script type="module">
+import * as THREE from 'three';
+import { F16 } from '/src/aircraft/F16.js';
+import { fitRightArm } from './right-arm.js';
+const renderer = new THREE.WebGLRenderer({canvas:document.querySelector('canvas'),antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x84898b);
+scene.add(new THREE.HemisphereLight(0xfff9ef,0xb7c3cb,1.75));
+const sun = new THREE.DirectionalLight(0xfff2df,2.5);
+sun.position.set(-2,4,1);
+scene.add(sun);
+sun.layers.enable(1);
+scene.children[0].layers.enable(1);
+const fill = new THREE.DirectionalLight(0xe9f4ff,2.1);
+fill.position.set(2,3,-1);
+fill.layers.enable(1);
+scene.add(fill);
+const plane = new F16({ exteriorOnly:true, noExhaust:true });
+await plane.ready;
+if (!plane.modelLoaded || plane.pilotMesh.userData.activeScene.name !== 'F16_Pilot_GLB') throw Error('Missing F-16 or pilot GLB');
+plane.setCockpitMode(true,true,'balanced');
+scene.add(plane.group);
+const baseline = plane.pilotMesh.userData.activeScene;
+const proposal = baseline.clone(true);
+fitRightArm(proposal);
+plane.pilotMesh.add(proposal);
+for (const root of [baseline,proposal]) {
+  for (const name of ['Pilot_Body_ShoulderSocket_R','Pilot_Body_Deltoid_R',
+    'Pilot_Body_StickHead','Pilot_Body_StickGrip','Pilot_Body_StickBase',
+    'Right sleeve','Right glove back','Right glove leather']) {
+    root.getObjectByName(name)?.traverse(node=>node.layers.enable(1));
+  }
+}
+const camera = new THREE.PerspectiveCamera(52,innerWidth/innerHeight,0.008,80);
+const aim = new THREE.Vector3();
+const pos = plane.pilotMesh.position;
+const cameraPos = new THREE.Vector3();
+window.show = (variant,view='cockpit')=>{
+  baseline.visible = variant==='before';
+  proposal.visible = !baseline.visible;
+  if (view==='detail') {
+    camera.layers.set(1);
+    scene.background.set(0xc2c9c8);
+    cameraPos.set(.78,.61,-.34).add(pos);
+    aim.set(.217,.298,-.034).add(pos);
+    camera.fov=37;
+  } else {
+    camera.layers.set(0);
+    scene.background.set(0x84898b);
+    cameraPos.set(0,.94,-3.60);
+    aim.set(.212,.302,-.046).add(pos);
+    camera.fov=54;
+  }
+  camera.position.copy(cameraPos);
+  camera.lookAt(aim);
+  camera.updateProjectionMatrix();
+  renderer.render(scene,camera);
+  return {calls:renderer.info.render.calls,triangles:renderer.info.render.triangles};
+};
+window.bench = variant=>{
+  window.show(variant);
+  const gl=renderer.getContext();
+  gl.finish();
+  const start=performance.now();
+  for(let i=0;i<25;i++) renderer.render(scene,camera);
+  gl.finish();
+  return (performance.now()-start)/25;
+};
+const query = new URLSearchParams(location.search);
+window.show(query.get('model')==='before'?'before':'after',
+  query.get('view')==='detail'?'detail':'cockpit');
+</script></html>
